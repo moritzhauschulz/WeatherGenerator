@@ -930,7 +930,9 @@ class Model(torch.nn.Module):
                     # step bound as a default arg: the loop variable would otherwise be captured
                     # by reference and resolve to the last forecast step.
                     diagnostics.bind_decoder(
-                        lambda toks, step=step: self.decode_tokens(model_params, step, toks, batch)
+                        lambda toks, step=step: self.decode_tokens(
+                            model_params, step, toks, source_samples
+                        )
                     )
 
                 # apply forecasting engine
@@ -1108,7 +1110,7 @@ class Model(torch.nn.Module):
         model_params: ModelParams,
         step: int,
         tokens: torch.Tensor,
-        batch: ModelBatch,
+        batch: BatchSamples,
     ) -> dict:
         """Decode arbitrary latent tokens to physical space, outside the forward's bookkeeping.
 
@@ -1117,7 +1119,7 @@ class Model(torch.nn.Module):
         Returns ``{stream_name: (pred_per_batch_item, ...)}``.
         """
         return self.predict_decoders(
-            model_params, step, tokens, batch, ModelOutput(1), out_step=0
+            model_params, step, tokens, batch, ModelOutput([0], 0, batch), out_step=0
         ).physical[0]
 
     def predict_latent(
