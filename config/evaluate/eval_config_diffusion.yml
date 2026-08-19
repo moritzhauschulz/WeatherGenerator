@@ -1,8 +1,8 @@
 #optional: if commented out all is taken care of by the default settings
 # NB. global options apply to all run_ids 
-#global_plotting_options:
+global_plotting_options:
 #  region: ["belgium", "global"]
-#  image_format : "png" #options: "png", "pdf", "svg", "eps", "jpg" ..
+ image_format : "pdf" #options: "png", "pdf", "svg", "eps", "jpg" ..
 #  dpi_val : 300
 #  fps: 2
 #  ERA5:
@@ -18,18 +18,18 @@
 #      vmax: 40
 
 evaluation:
-  metrics  : ["psd","rmse"]
+  metrics  : ["rmse"]
   regions: ["global"]
   summary_plots : true
   ratio_plots : false
   heat_maps : false
-  summary_dir: "./plots/"
+  summary_dir: "./plots/for_christian_ku6i70v3_hby1zknr/"
   plot_ensemble: "members" #supported: false, "std", "minmax", "members"
   plot_score_maps: false #plot scores on a 2D maps. it slows down score computation 
   print_summary: false #print out score values on screen. it can be verbose
   log_scale: false
   add_grid: false
-  psd_show_ratio: true    # false -> PSD plots (incl. gif frames) are spectra-only, no ratio panel
+  psd_show_ratio: false    # false -> PSD plots (incl. gif frames) are spectra-only, no ratio panel
   psd_animation: true     # false -> skip the per-run PSD gif over forecast steps
   score_cards: false
   bar_plots: false
@@ -39,7 +39,7 @@ evaluation:
 
 default_streams:
   ERA5:
-    channels: ["2t", "q_850"] #, "10v", "z_500", "t_850", "u_850", "v_850", "q_850", ]
+    channels: ["q_850"] #, "10v", "z_500", "t_850", "u_850", "v_850", "q_850", ]
     evaluation:
       forecast_step: "all"
       sample: "all"
@@ -48,20 +48,20 @@ default_streams:
       sample: [0]
       forecast_step: all #supported: "all", [1,2,3,...], "1-50" (equivalent of [1,2,3,...50])
       ensemble: [0] #supported: "all", "mean", [0,1,2]
-      plot_maps: true
-      plot_target: true
-      plot_histograms: true
-      plot_animations: true
+      plot_maps: false
+      plot_target: false
+      plot_histograms: false
+      plot_animations: false
 
       
 run_ids :
   
   ku6i70v3:
     label: "forecast finetuned deterministic (skkbxfya -> dy0jlrmw)"
-  # kvp6fds7:
-  #   label: "forecast finetuned deterministic (skkbxfya -> mapw62ot)"
-  vfjgla68:
-    label: "decoder finetuned diffusion (skkbxfya -> ni41n7gy -> ft2z04v2)"
+  hby1zknr:
+    label: "decoder finetuned diffusion (skkbxfya -> ni41n7gy -> mapw62ot)"
+  # vfjgla68:
+  #   label: "decoder finetuned diffusion (skkbxfya -> ni41n7gy -> ft2z04v2)"
     # results_base_dir : "../results/"
     #NEW: if "streams" is not specified, the default streams are used
   # a7agq09c:
