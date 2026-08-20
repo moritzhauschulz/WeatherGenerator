@@ -2,7 +2,7 @@
 # NB. global options apply to all run_ids 
 global_plotting_options:
 #  region: ["belgium", "global"]
- image_format : "pdf" #options: "png", "pdf", "svg", "eps", "jpg" ..
+ image_format : "png" #options: "png", "pdf", "svg", "eps", "jpg" ..
 #  dpi_val : 300
 #  fps: 2
 #  ERA5:
@@ -18,12 +18,12 @@ global_plotting_options:
 #      vmax: 40
 
 evaluation:
-  metrics  : ["rmse"]
+  metrics  : ["psd"]
   regions: ["global"]
   summary_plots : true
   ratio_plots : false
   heat_maps : false
-  summary_dir: "./plots/for_christian_ku6i70v3_hby1zknr/"
+  summary_dir: "./plots/testing_plot_features/"
   plot_ensemble: "members" #supported: false, "std", "minmax", "members"
   plot_score_maps: false #plot scores on a 2D maps. it slows down score computation 
   print_summary: false #print out score values on screen. it can be verbose
@@ -31,6 +31,10 @@ evaluation:
   add_grid: false
   psd_show_ratio: false    # false -> PSD plots (incl. gif frames) are spectra-only, no ratio panel
   psd_animation: true     # false -> skip the per-run PSD gif over forecast steps
+  psd_combined_plots: true # false -> skip the side-by-side (all models, one shared legend/colorbar) evolution + gap-heatmap plots
+  psd_first_last_plot: true # false -> skip the first-vs-last forecast step comparison plot across models
+  psd_step_montage: true   # false -> skip the subsampled-forecast-step montage plot across models
+  psd_step_montage_n: 10   # panel every n-th forecast step (plus the first and final step)
   score_cards: false
   bar_plots: false
   num_processes: 0  #options: int, "auto", 0 means no parallelism (default)
@@ -46,7 +50,7 @@ default_streams:
       ensemble: "all" #supported: "all", "mean", [0,1,2]
     plotting:
       sample: [0]
-      forecast_step: all #supported: "all", [1,2,3,...], "1-50" (equivalent of [1,2,3,...50])
+      forecast_step: "all" #supported: "all", [1,2,3,...], "1-50" (equivalent of [1,2,3,...50])
       ensemble: [0] #supported: "all", "mean", [0,1,2]
       plot_maps: false
       plot_target: false
@@ -55,7 +59,6 @@ default_streams:
 
       
 run_ids :
-  
   ku6i70v3:
     label: "forecast finetuned deterministic (skkbxfya -> dy0jlrmw)"
   hby1zknr:

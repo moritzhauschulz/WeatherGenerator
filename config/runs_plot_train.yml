@@ -3,43 +3,27 @@
 
 train :
   plot :
-    huwssly8:
+    ss900572:
       slurm_id : 0
-      description: "new MTM run diff"
-    fqxmlc0v:
+      description: "oliqngmf MTM run diff"
+    oliqngmf:
       slurm_id : 0
-      description: "old MTM run diff"
-    oliqngmf :
+      description: "MTM"
+    prkmwzlg :
       slurm_id : 0
-      description: "new MTM run"
-    hsq7hsb6:
+      description: "new73gkw MTM run diff"
+    new73gkw:
       slurm_id : 0
-      description: "old MTM run"
-    # perrjey5 :
-    #   slurm_id : 0
-    #   description: "N320-obs, with absolute coords, larger decoder, time_window_step=6h"
-    # c71eo6pu :
-    #   slurm_id : 0
-    #   description: "perrjey5 contd : N320-obs, with absolute coords, larger decoder, time_window_step=6h"
-    # xc1n4mw3 :
-    #   slurm_id : 0
-    #   description: "develop-ssl-diffusion-v1, config_forecasting_n320_obs.yml"
-    # kdl0orun :
-    #   slurm_id : 0
-    #   description: "develop-ssl-diffusion-v1, config_forecasting_n320_obs.yml, streams_prepint, linear"
-    # e4327u4h :
-    #   slurm_id : 0
-    #   description: "develop-ssl-diffusion-v1, config_forecasting_n320_obs.yml, streams_prepint, transformer"
-    # d5nrjup6 :
-    #   slurm_id : 0
-    #   description: "develop"
-    # iqbifydo :
-    #   slurm_id : 0
-    #   description: "develop-ssl-diffusion-v1"
-    # fsvwafcl :
-    #   slurm_id : 0
-    #   description: "develop-ssl-diffusion-v1, FSDP"
-    
+      description: "MTM FT"
+    qtbn8vgb:
+      slurm_id : 0
+      description: "skkbxfya -> ni41n7gy -> qtbn8vgb"
+    kz2n1t60:
+      slurm_id : 0
+      description: "skkbxfya -> mx7k88dy -> kz2n1t60"
+    skkbxfya:
+      slurm_id : 0
+      description: "skkbxfya -> xxoplye6 -> hzsc0c1m"
 
 # # develop-ssl-diffusion-v1, config_forecasting_n320_obs.yml
 # 2026-07-25 15:41:27,781 - __main__ - INFO - ==============================================================================================
