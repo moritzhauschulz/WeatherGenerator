@@ -1130,6 +1130,10 @@ def plot_summary(cfg: dict, scores_dict: dict, summary_dir: Path):
         "baseline": eval_opt.get("baseline", None),
         "psd_show_ratio": eval_opt.get("psd_show_ratio", True),
         "psd_animation": eval_opt.get("psd_animation", True),
+        "psd_combined_plots": eval_opt.get("psd_combined_plots", True),
+        "psd_first_last_plot": eval_opt.get("psd_first_last_plot", True),
+        "psd_step_montage": eval_opt.get("psd_step_montage", True),
+        "psd_step_montage_n": eval_opt.get("psd_step_montage_n", 10),
     }
 
     plotter = LinePlots(plot_cfg, summary_dir)

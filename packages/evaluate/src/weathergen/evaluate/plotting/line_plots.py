@@ -12,13 +12,15 @@
 import logging
 import os
 import re
+import textwrap
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import xarray as xr
-from matplotlib.colors import TwoSlopeNorm
+from matplotlib.colors import TwoSlopeNorm, to_rgb
+from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
 from numpy.typing import NDArray
 from PIL import Image
@@ -33,6 +35,26 @@ from weathergen.evaluate.plotting.plot_utils import (
 
 _logger = logging.getLogger(__name__)
 _logger.setLevel(logging.INFO)
+
+
+def _wrap_panel_title(label: str, width: int = 26) -> str:
+    """Wrap a (possibly long) run label onto multiple lines instead of one long line.
+
+    Used for per-panel titles in side-by-side multi-run figures, where a long label would
+    otherwise overflow into the neighbouring panel.
+    """
+    return textwrap.fill(label, width=width)
+
+
+def _lighten(color, factor: float = 0.55) -> tuple[float, float, float]:
+    """Blend an RGB color toward white by *factor* (0 = unchanged, 1 = white).
+
+    Used to derive a same-hue-but-lighter shade for a second series (e.g. "last step") that
+    should read as clearly related to, but distinct from, a "first step" series in the same
+    base color.
+    """
+    r, g, b = to_rgb(color)
+    return (r + (1.0 - r) * factor, g + (1.0 - g) * factor, b + (1.0 - b) * factor)
 
 
 class LinePlots:
@@ -57,6 +79,14 @@ class LinePlots:
                 - fps: frames per second for the PSD forecast-step animation (default 2)
                 - psd_show_ratio: if False, PSD plots are single-panel (spectra only)
                 - psd_animation: if False, no per-run PSD gif over forecast steps is written
+                - psd_combined_plots: if False, skip the side-by-side (all models, one shared
+                    legend/colorbar) evolution + gap-heatmap plots
+                - psd_first_last_plot: if False, skip the first-vs-last forecast step comparison
+                    plot across models
+                - psd_step_montage: if False, skip the subsampled-forecast-step montage plot
+                    across models
+                - psd_step_montage_n: panel every n-th forecast step in the montage (plus the
+                    first and final step), default 10
         output_basedir:
             Base directory under which the plots will be saved.
             Expected scheme `<results_base_dir>/<run_id>`.
@@ -72,6 +102,10 @@ class LinePlots:
         self.fps = plotter_cfg.get("fps", 2)
         self.psd_show_ratio = plotter_cfg.get("psd_show_ratio", True)
         self.psd_animate = plotter_cfg.get("psd_animation", True)
+        self.psd_combined = plotter_cfg.get("psd_combined_plots", True)
+        self.psd_first_last = plotter_cfg.get("psd_first_last_plot", True)
+        self.psd_step_montage = plotter_cfg.get("psd_step_montage", True)
+        self.psd_step_montage_n = plotter_cfg.get("psd_step_montage_n", 10)
         self.out_plot_dir_lines = Path(output_basedir) / "line_plots"
         self.out_plot_dir_ratio = Path(output_basedir) / "ratio_plots"
         self.out_plot_dir_psd = Path(output_basedir) / "psd_plots"
@@ -903,7 +937,7 @@ class LinePlots:
                 ax_ratio.semilogx(freq, ratio, color=c, lw=1.0)
 
         # Single, step-independent grey target on top of the prediction bundle.
-        ax_spec.loglog(ref_freq, tar_mean, color="0.45", lw=1.8, ls="--", zorder=5)
+        ax_spec.loglog(ref_freq, tar_mean, color="0.45", lw=1.8, ls="-", alpha=0.85, zorder=5)
 
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(fsteps[0], fsteps[-1]))
         fig.colorbar(
@@ -913,7 +947,15 @@ class LinePlots:
         ax_spec.legend(
             handles=[
                 Line2D([], [], color=cmap(0.5), lw=1.0, ls="-", label="Prediction (per step)"),
-                Line2D([], [], color="0.45", lw=1.8, ls="--", label="Target (mean over steps)"),
+                Line2D(
+                    [],
+                    [],
+                    color="0.45",
+                    lw=1.8,
+                    ls="-",
+                    alpha=0.85,
+                    label="Target (mean over steps)",
+                ),
             ],
             frameon=False,
             fontsize=8,
@@ -1067,6 +1109,481 @@ class LinePlots:
 
         fname = out_dir / f"{tag or 'psd_gap_heatmap'}.{self.image_format}"
         _logger.debug(f"Saving PSD gap heatmap to {fname}")
+        fig.savefig(str(fname), bbox_inches="tight", dpi=self.dpi_val)
+        plt.close(fig)
+        return fname
+
+    def psd_evolution_combined_plot(
+        self,
+        run_per_fstep_datasets: dict[str, dict[int, dict]],
+        run_labels: dict[str, str],
+        tag: str = "",
+        variable: str = "",
+    ) -> Path | None:
+        """Side-by-side evolution plot: one panel per run, one shared colorbar/legend.
+
+        Same content as :meth:`psd_evolution_plot` (per-step spectra colour-coded by forecast
+        step, plus a single grey step-averaged target), but laid out as one figure with one
+        panel per run instead of a separate file per run, so models can be compared directly.
+        The forecast-step colour scale and the spectra/target legend are shared across all
+        panels (built once, not repeated per panel).
+
+        Parameters
+        ----------
+        run_per_fstep_datasets : dict[str, dict[int, dict]]
+            Maps run_id -> per-fstep dict (as built by ``psd_plot_metric_region``'s pass 1),
+            each leaf a dict with ``frequencies``, ``psd_target``, ``psd_prediction``,
+            ``psd_method``.
+        run_labels : dict[str, str]
+            Maps run_id -> human-readable label, used as each panel's title.
+        tag : str
+            Filename tag.
+        variable : str
+            Channel name, used in the figure title.
+
+        Returns
+        -------
+        Path | None
+            Path of the written figure, or None if no run had >= 2 forecast steps.
+        """
+        run_ids = [rid for rid, d in run_per_fstep_datasets.items() if len(d) >= 2]
+        if not run_ids:
+            return None
+
+        out_dir = Path(self.out_plot_dir_psd)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        n = len(run_ids)
+        n_rows = 2 if self.psd_show_ratio else 1
+        fig, axes = plt.subplots(
+            n_rows,
+            n,
+            figsize=(4.5 * n, 7 if n_rows == 2 else 5),
+            gridspec_kw={"height_ratios": [2, 1]} if n_rows == 2 else None,
+            squeeze=False,
+        )
+
+        cmap = plt.get_cmap("viridis")
+        all_fsteps = sorted({f for rid in run_ids for f in run_per_fstep_datasets[rid]})
+        norm = plt.Normalize(all_fsteps[0], all_fsteps[-1])
+
+        psd_method = "sht"
+        for col, run_id in enumerate(run_ids):
+            ax_spec = axes[0, col]
+            ax_ratio = axes[1, col] if n_rows == 2 else None
+            per_fstep_datasets = run_per_fstep_datasets[run_id]
+            fsteps = sorted(per_fstep_datasets)
+            psd_method = per_fstep_datasets[fsteps[0]].get("psd_method", "sht")
+
+            ref_freq = np.asarray(per_fstep_datasets[fsteps[0]]["frequencies"])
+            targets = [np.asarray(per_fstep_datasets[f]["psd_target"]) for f in fsteps]
+            if all(t.shape == targets[0].shape for t in targets):
+                tar_mean = np.nanmean(np.vstack(targets), axis=0)
+            else:
+                _logger.warning(
+                    f"PSD combined evolution ({run_id} / {variable}): target spectra differ "
+                    "in length across forecast steps; falling back to the first step's target."
+                )
+                tar_mean = targets[0]
+
+            for fstep in fsteps:
+                ds = per_fstep_datasets[fstep]
+                freq = np.asarray(ds["frequencies"])
+                pred = np.asarray(ds["psd_prediction"])
+                c = cmap(norm(fstep))
+                ax_spec.loglog(freq, pred, color=c, lw=1.0)
+                if ax_ratio is not None and pred.shape == tar_mean.shape:
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        ratio = np.where(tar_mean > 0, pred / tar_mean, np.nan)
+                    ax_ratio.semilogx(freq, ratio, color=c, lw=1.0)
+
+            ax_spec.loglog(ref_freq, tar_mean, color="0.45", lw=1.8, ls="-", alpha=0.85, zorder=5)
+            ax_spec.set_title(_wrap_panel_title(run_labels.get(run_id, run_id)), fontsize=9)
+            ax_spec.grid(True, which="both", ls="--", alpha=0.4)
+            if col == 0:
+                ax_spec.set_ylabel("Power")
+            if ax_ratio is not None:
+                ax_ratio.axhline(1.0, ls="--", color="gray", lw=0.8)
+                ax_ratio.set_ylim(0, 2)
+                ax_ratio.set_xlabel("Frequency (1/deg)")
+                ax_ratio.grid(True, which="both", ls="--", alpha=0.4)
+                if col == 0:
+                    ax_ratio.set_ylabel("Pred / Target (mean)")
+            else:
+                ax_spec.set_xlabel("Frequency (1/deg)")
+
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        fig.colorbar(sm, ax=axes.ravel().tolist(), label="Forecast step", shrink=0.8)
+
+        # Panel titles can wrap onto multiple lines (see _wrap_panel_title); push the legend
+        # row and the figure-level title above the tallest one instead of a fixed offset.
+        max_title_lines = max(
+            _wrap_panel_title(run_labels.get(run_id, run_id)).count("\n") + 1
+            for run_id in run_ids
+        )
+        legend_y = 1.0 + 0.03 * max_title_lines
+        fig.legend(
+            handles=[
+                Line2D([], [], color=cmap(0.5), lw=1.0, ls="-", label="Prediction (per step)"),
+                Line2D(
+                    [],
+                    [],
+                    color="0.45",
+                    lw=1.8,
+                    ls="-",
+                    alpha=0.85,
+                    label="Target (mean over steps)",
+                ),
+            ],
+            loc="upper center",
+            bbox_to_anchor=(0.5, legend_y),
+            ncol=2,
+            frameon=False,
+            fontsize=8,
+        )
+
+        title_parts = [f"PSD evolution, combined ({psd_method})"]
+        if variable:
+            title_parts.append(variable)
+        fig.suptitle(" – ".join(title_parts), y=legend_y + 0.06)
+
+        fname = out_dir / f"{tag or 'psd_evolution_combined'}.{self.image_format}"
+        _logger.debug(f"Saving combined PSD evolution plot to {fname}")
+        fig.savefig(str(fname), bbox_inches="tight", dpi=self.dpi_val)
+        plt.close(fig)
+        return fname
+
+    def psd_gap_heatmap_combined(
+        self,
+        run_grids: dict[str, tuple[NDArray, list[int], NDArray]],
+        vmin: float,
+        vmax: float,
+        run_labels: dict[str, str],
+        tag: str = "",
+        variable: str = "",
+        psd_method: str = "sht",
+    ) -> Path | None:
+        """Side-by-side gap heatmap: one panel per run, one shared colorbar.
+
+        Same quantity and colour convention as :meth:`psd_gap_heatmap` (log(prediction) -
+        log(target), diverging colormap centred on 0, shared vmin/vmax across every run being
+        compared), but laid out as one figure with one panel per run instead of a separate
+        file per run, mirroring the shared-colorbar layout already used by :meth:`heat_map`.
+
+        Parameters
+        ----------
+        run_grids : dict[str, tuple[NDArray, list[int], NDArray]]
+            Maps run_id -> (freq, fsteps, grid), as produced by ``_compute_psd_gap_grid``.
+        vmin, vmax : float
+            Colour scale bounds, shared across all panels (already extended to include 0 by
+            the caller).
+        run_labels : dict[str, str]
+            Maps run_id -> human-readable label, used as each panel's title.
+        tag : str
+            Filename tag.
+        variable : str
+            Channel name, used in the figure title.
+        psd_method : str
+            Used in the figure title only.
+
+        Returns
+        -------
+        Path | None
+            Path of the written figure, or None if ``run_grids`` is empty.
+        """
+        run_ids = list(run_grids)
+        if not run_ids:
+            return None
+
+        out_dir = Path(self.out_plot_dir_psd)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        n = len(run_ids)
+        fig, axes = plt.subplots(1, n, figsize=(4.5 * n, 5), squeeze=False)
+        norm = TwoSlopeNorm(vcenter=0.0, vmin=vmin, vmax=vmax)
+
+        mesh = None
+        for col, run_id in enumerate(run_ids):
+            ax = axes[0, col]
+            freq, fsteps, grid = run_grids[run_id]
+            mesh = ax.pcolormesh(
+                freq, fsteps, grid, cmap="coolwarm", norm=norm, shading="nearest"
+            )
+            ax.set_title(_wrap_panel_title(run_labels.get(run_id, run_id)), fontsize=9)
+            ax.set_xlabel("Frequency (1/deg)")
+            if col == 0:
+                ax.set_ylabel("Forecast step")
+
+        cbar = fig.colorbar(mesh, ax=axes.ravel().tolist(), shrink=0.6, location="right", pad=0.02)
+        cbar.set_label("log(prediction) - log(target)")
+
+        title_parts = [f"PSD gap, combined ({psd_method})"]
+        if variable:
+            title_parts.append(variable)
+        # Panel titles can wrap onto multiple lines (see _wrap_panel_title); push the
+        # figure-level title above the tallest one instead of a fixed offset.
+        max_title_lines = max(
+            _wrap_panel_title(run_labels.get(run_id, run_id)).count("\n") + 1
+            for run_id in run_ids
+        )
+        fig.suptitle(" – ".join(title_parts), y=1.0 + 0.05 * max_title_lines)
+
+        fname = out_dir / f"{tag or 'psd_gap_heatmap_combined'}.{self.image_format}"
+        _logger.debug(f"Saving combined PSD gap heatmap to {fname}")
+        fig.savefig(str(fname), bbox_inches="tight", dpi=self.dpi_val)
+        plt.close(fig)
+        return fname
+
+    def psd_first_last_plot(
+        self,
+        run_first_last: dict[str, dict],
+        run_labels: dict[str, str],
+        target_avg: NDArray,
+        freq: NDArray,
+        first_fstep: int,
+        last_fstep: int,
+        tag: str = "",
+        variable: str = "",
+    ) -> Path:
+        """Compare every run's first- and last-forecast-step spectra in one plot.
+
+        Each run's ``first_fstep`` line is drawn in that run's base colour; its
+        ``last_fstep`` line uses a lighter shade of the *same* colour (both solid, both at
+        slightly reduced opacity), so the decline over the rollout is directly comparable
+        across models without relying on a dashed/solid distinction that's easy to miss. The
+        single grey target curve is solid and fully opaque — the average of the target
+        spectrum at only these two steps (not all steps, unlike :meth:`psd_evolution_plot`'s
+        step-averaged target), since the two steps being compared are what should be judged
+        against.
+
+        Parameters
+        ----------
+        run_first_last : dict[str, dict]
+            Maps run_id -> {"first": <leaf dict>, "last": <leaf dict>}, each leaf a dict with
+            ``frequencies``, ``psd_target``, ``psd_prediction``, ``psd_method`` at the shared
+            first/last forecast step.
+        run_labels : dict[str, str]
+            Maps run_id -> human-readable label.
+        target_avg : NDArray
+            Target spectrum averaged over just the first and last step (precomputed by the
+            caller, since target is treated as run-independent elsewhere in this module).
+        freq : NDArray
+            Frequency/wavenumber axis shared by ``target_avg`` and every run's curves.
+        first_fstep, last_fstep : int
+            The shared first/last forecast step numbers, used in labels/titles.
+        tag : str
+            Filename tag.
+        variable : str
+            Channel name, used in the title.
+
+        Returns
+        -------
+        Path
+            Path of the written figure.
+        """
+        out_dir = Path(self.out_plot_dir_psd)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        fig, ax_spec, ax_ratio = self._psd_axes((10, 8))
+
+        ax_spec.loglog(
+            freq,
+            target_avg,
+            color="black",
+            lw=1.8,
+            ls="-",
+            label=f"Target (avg, steps {first_fstep} & {last_fstep})",
+        )
+        colors = plt.cm.tab10.colors
+        line_alpha = 0.8
+        psd_method = "sht"
+        for i, (run_id, steps) in enumerate(run_first_last.items()):
+            c_first = colors[i % len(colors)]
+            c_last = _lighten(c_first)
+            label = run_labels.get(run_id, run_id)
+            psd_method = steps["first"].get("psd_method", psd_method)
+            pred_first = np.asarray(steps["first"]["psd_prediction"])
+            pred_last = np.asarray(steps["last"]["psd_prediction"])
+            ax_spec.loglog(freq, pred_first, color=c_first, lw=1.5, alpha=line_alpha, label=label)
+            ax_spec.loglog(freq, pred_last, color=c_last, lw=1.5, alpha=line_alpha)
+
+            if ax_ratio is not None:
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    ratio_first = np.where(target_avg > 0, pred_first / target_avg, np.nan)
+                    ratio_last = np.where(target_avg > 0, pred_last / target_avg, np.nan)
+                ax_ratio.semilogx(freq, ratio_first, color=c_first, lw=1.2, alpha=line_alpha)
+                ax_ratio.semilogx(freq, ratio_last, color=c_last, lw=1.2, alpha=line_alpha)
+
+        ax_spec.set_ylabel("Power")
+        title_parts = [f"PSD first/last step ({psd_method})"]
+        if variable:
+            title_parts.append(variable)
+        ax_spec.set_title(" – ".join(title_parts))
+        handles, _ = ax_spec.get_legend_handles_labels()
+        handles += [
+            Line2D(
+                [], [], color="0.35", lw=1.5, alpha=line_alpha, label=f"First step ({first_fstep})"
+            ),
+            Line2D(
+                [],
+                [],
+                color=_lighten("0.35"),
+                lw=1.5,
+                alpha=line_alpha,
+                label=f"Last step ({last_fstep})",
+            ),
+        ]
+        ax_spec.legend(handles=handles, frameon=False, fontsize=7)
+        ax_spec.grid(True, which="both", ls="--", alpha=0.4)
+
+        self._finish_psd_axes(ax_spec, ax_ratio, ratio_ylabel="Pred / Target (avg)")
+
+        fname = out_dir / f"{tag or 'psd_first_last'}.{self.image_format}"
+        _logger.debug(f"Saving PSD first/last plot to {fname}")
+        fig.savefig(str(fname), bbox_inches="tight", dpi=self.dpi_val)
+        plt.close(fig)
+        return fname
+
+    def psd_step_montage_plot(
+        self,
+        run_per_fstep_datasets: dict[str, dict[int, dict]],
+        run_labels: dict[str, str],
+        n: int = 10,
+        tag: str = "",
+        variable: str = "",
+    ) -> Path | None:
+        """Grid of multi-run spectra snapshots at a subsampled sequence of forecast steps.
+
+        One panel per selected forecast step: the first available step, every step that's a
+        multiple of ``n``, and the final step (unless it's already a multiple of ``n``),
+        wrapping to a new row after 4 panels. Each panel overlays every run that has data at
+        that step (same "target from whichever run has it" convention as :meth:`psd_plot`),
+        colour-coded by run with a colour mapping fixed once across the whole grid so a single
+        shared legend (and shared, only-on-the-edges x/y axes) covers every panel.
+
+        Parameters
+        ----------
+        run_per_fstep_datasets : dict[str, dict[int, dict]]
+            Maps run_id -> per-fstep dict (as built by ``psd_plot_metric_region``'s pass 1),
+            each leaf a dict with ``frequencies``, ``psd_target``, ``psd_prediction``,
+            ``psd_method``.
+        run_labels : dict[str, str]
+            Maps run_id -> human-readable label, used in the shared legend.
+        n : int
+            Panel every n-th forecast step (plus the first and final step). Values <= 0 fall
+            back to first+final only.
+        tag : str
+            Filename tag.
+        variable : str
+            Channel name, used in the figure title.
+
+        Returns
+        -------
+        Path | None
+            Path of the written figure, or None if no run has any forecast-step data.
+        """
+        all_fsteps = sorted({f for d in run_per_fstep_datasets.values() for f in d})
+        if not all_fsteps:
+            return None
+
+        selected = [all_fsteps[0]]
+        if n > 0:
+            selected += [f for f in all_fsteps if f % n == 0 and f not in selected]
+        if all_fsteps[-1] not in selected:
+            selected.append(all_fsteps[-1])
+        selected = sorted(selected)
+
+        out_dir = Path(self.out_plot_dir_psd)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        n_panels = len(selected)
+        ncols = 4
+        nrows = (n_panels + ncols - 1) // ncols
+        fig = plt.figure(figsize=(4.0 * ncols, 3.6 * nrows))
+        # Double column resolution so a row with fewer than `ncols` panels (the total is not
+        # a multiple of 4, or there simply aren't 4 selected steps) can be centered via a
+        # half-column offset instead of only ever starting flush against the left edge.
+        gs = GridSpec(nrows, ncols * 2, figure=fig)
+
+        run_ids_all = sorted(run_per_fstep_datasets)
+        colors = plt.cm.tab10.colors
+        run_color = {rid: colors[i % len(colors)] for i, rid in enumerate(run_ids_all)}
+
+        psd_method = "sht"
+        first_ax = None
+        row_axes: list[list[plt.Axes]] = [[] for _ in range(nrows)]
+        for idx, fstep in enumerate(selected):
+            row, col_in_row = divmod(idx, ncols)
+            row_panel_count = min(ncols, n_panels - row * ncols)
+            offset = ncols - row_panel_count  # centering offset, in half-column units
+            start = offset + 2 * col_in_row
+            ax = fig.add_subplot(gs[row, start : start + 2], sharex=first_ax, sharey=first_ax)
+            if first_ax is None:
+                first_ax = ax
+            row_axes[row].append(ax)
+
+            contributing = [rid for rid in run_ids_all if fstep in run_per_fstep_datasets[rid]]
+            if not contributing:
+                continue
+
+            tgt_ds = run_per_fstep_datasets[contributing[0]][fstep]
+            psd_method = tgt_ds.get("psd_method", psd_method)
+            ax.loglog(
+                np.asarray(tgt_ds["frequencies"]),
+                np.asarray(tgt_ds["psd_target"]),
+                color="black",
+                lw=1.5,
+                alpha=0.85,
+            )
+            for rid in contributing:
+                ds = run_per_fstep_datasets[rid][fstep]
+                ax.loglog(
+                    np.asarray(ds["frequencies"]),
+                    np.asarray(ds["psd_prediction"]),
+                    color=run_color[rid],
+                    lw=1.3,
+                )
+            ax.set_title(f"Step {fstep}", fontsize=9)
+            ax.grid(True, which="both", ls="--", alpha=0.4)
+
+        for ax in row_axes[-1]:
+            ax.set_xlabel("Frequency (1/deg)")
+        for row in range(nrows):
+            row_axes[row][0].set_ylabel("Power")
+
+        # Declutter repeated tick numbers (shared axes make them identical across panels):
+        # y-tick values only on each row's leftmost panel once that row has more than one
+        # panel; x-tick values only on the bottom row, once there's more than one row.
+        for row in range(nrows):
+            if len(row_axes[row]) > 1:
+                for ax in row_axes[row][1:]:
+                    ax.tick_params(labelleft=False)
+        if nrows > 1:
+            for row in range(nrows - 1):
+                for ax in row_axes[row]:
+                    ax.tick_params(labelbottom=False)
+
+        handles = [Line2D([], [], color="black", lw=1.5, alpha=0.85, label="Target")]
+        handles += [
+            Line2D([], [], color=run_color[rid], lw=1.3, label=run_labels.get(rid, rid))
+            for rid in run_ids_all
+        ]
+        fig.legend(
+            handles=handles,
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=min(len(handles), 5),
+            frameon=False,
+            fontsize=8,
+        )
+
+        title_parts = [f"PSD steps, every {n} ({psd_method})"]
+        if variable:
+            title_parts.append(variable)
+        fig.suptitle(" – ".join(title_parts), y=1.1)
+
+        fname = out_dir / f"{tag or 'psd_step_montage'}.{self.image_format}"
+        _logger.debug(f"Saving PSD step montage plot to {fname}")
         fig.savefig(str(fname), bbox_inches="tight", dpi=self.dpi_val)
         plt.close(fig)
         return fname
