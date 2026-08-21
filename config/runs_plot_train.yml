@@ -15,15 +15,15 @@ train :
     new73gkw:
       slurm_id : 0
       description: "MTM FT"
-    qtbn8vgb:
-      slurm_id : 0
-      description: "skkbxfya -> ni41n7gy -> qtbn8vgb"
-    kz2n1t60:
-      slurm_id : 0
-      description: "skkbxfya -> mx7k88dy -> kz2n1t60"
-    skkbxfya:
-      slurm_id : 0
-      description: "skkbxfya -> xxoplye6 -> hzsc0c1m"
+    # qtbn8vgb:
+    #   slurm_id : 0
+    #   description: "skkbxfya -> ni41n7gy -> qtbn8vgb"
+    # kz2n1t60:
+    #   slurm_id : 0
+    #   description: "skkbxfya -> mx7k88dy -> kz2n1t60"
+    # hzsc0c1m:
+    #   slurm_id : 0
+    #   description: "skkbxfya -> xxoplye6 -> hzsc0c1m"
 
 # # develop-ssl-diffusion-v1, config_forecasting_n320_obs.yml
 # 2026-07-25 15:41:27,781 - __main__ - INFO - ==============================================================================================

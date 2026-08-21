@@ -15,11 +15,11 @@ global_plotting_options:
     marker_size: 4
     scale_marker_size: true
 evaluation:
-  metrics: ["rmse"]
+  metrics: ["psd", "rmse"]
   regions:
   - global
   summary_plots: true
-  summary_dir: ./plots/
+  summary_dir: ./plots/20-08-26-diff-decft-new-runs/
   print_summary: false
   log_scale: false
   add_grid: true
@@ -28,14 +28,15 @@ evaluation:
   plot_bias: false
   plot_target: true
   plot_ensemble: "members"
+  psd_step_montage_n: 25
 run_ids:
-  iwr4tvaj:
-    label: "iwr4tvaj"
+  ku6i70v3:
+    label: "forecast finetuned deterministic (skkbxfya -> dy0jlrmw)"
     epoch: 0
     rank: 0
     streams:
       ERA5:
-        channels: ['q_850', '2t']
+        channels: ['q_850']
         evaluation:
           sample: "all"
           forecast_step: "all"
@@ -44,7 +45,64 @@ run_ids:
           forecast_step: "all"
           plot_maps: true
           plot_animations: true
-          plot_bias: false
-          plot_target: true
+          plot_bias: true
+          plot_target: false
+          plot_histograms: false
+          plot_ensemble: "members"
+  l05d7kvm:
+    label: "skkbxfya -> ni41n7gy -> qtbn8vgb"
+    epoch: 0
+    rank: 0
+    streams:
+      ERA5:
+        channels: ['q_850']
+        evaluation:
+          sample: "all"
+          forecast_step: "all"
+        plotting:
+          sample: "all"
+          forecast_step: "all"
+          plot_maps: true
+          plot_animations: true
+          plot_bias: true
+          plot_target: false
+          plot_histograms: false
+          plot_ensemble: "members"
+  d45kmqzc:
+    label: "skkbxfya -> mx7k88dy -> kz2n1t60"
+    epoch: 0
+    rank: 0
+    streams:
+      ERA5:
+        channels: ['q_850']
+        evaluation:
+          sample: "all"
+          forecast_step: "all"
+        plotting:
+          sample: "all"
+          forecast_step: "all"
+          plot_maps: true
+          plot_animations: true
+          plot_bias: true
+          plot_target: false
+          plot_histograms: false
+          plot_ensemble: "members"
+  we3jpg28:
+    label: "skkbxfya -> xxoplye6 -> hzsc0c1m"
+    epoch: 0
+    rank: 0
+    streams:
+      ERA5:
+        channels: ['q_850']
+        evaluation:
+          sample: "all"
+          forecast_step: "all"
+        plotting:
+          sample: "all"
+          forecast_step: "all"
+          plot_maps: true
+          plot_animations: true
+          plot_bias: true
+          plot_target: false
           plot_histograms: false
           plot_ensemble: "members"
