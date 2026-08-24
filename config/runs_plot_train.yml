@@ -3,6 +3,15 @@
 
 train :
   plot :
+    # v9cqd62s:
+    #   slurm_id: 0
+    #   description: "old run Matze"
+    # pgfp50c2:
+    #   slurm_id : 0
+    #   description: "new run with 4/2 workers: pgfp50c2"
+    # bwmk4ktc:
+    #   slurm_id : 0
+    #   description: "new run with 8/4 workers: bwmk4ktc"
     ss900572:
       slurm_id : 0
       description: "oliqngmf MTM run diff"
