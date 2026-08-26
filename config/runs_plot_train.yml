@@ -3,33 +3,54 @@
 
 train :
   plot :
-    # v9cqd62s:
-    #   slurm_id: 0
-    #   description: "old run Matze"
-    # pgfp50c2:
-    #   slurm_id : 0
-    #   description: "new run with 4/2 workers: pgfp50c2"
-    # bwmk4ktc:
-    #   slurm_id : 0
-    #   description: "new run with 8/4 workers: bwmk4ktc"
+    c3nvsqu8:
+      slurm_id: 0
+      description: "old run Matze"
+    pgfp50c2:
+      slurm_id : 0
+      description: "new run with 4/2 workers: pgfp50c2"
+    bwmk4ktc:
+      slurm_id : 0
+      description: "new run with 8/4 workers: bwmk4ktc"
+    dn06zo23:
+      slurm_id : 0
+      description: "new run with sigma [0.002,20]"
+    aw27t9p1:
+      slurm_id : 0
+      description: "new run with EMA600: aw27t9p1"
+    mibn2qst:
+      slurm_id : 0
+      description: "dcft on bwmk4ktc @ 33"
+    j6t4al7b:
+      slurm_id : 0
+      description: "dcft on pgfp50c2 @ 17"
     ss900572:
       slurm_id : 0
       description: "oliqngmf MTM run diff"
-    oliqngmf:
-      slurm_id : 0
-      description: "MTM"
-    prkmwzlg :
+    # oliqngmf:
+    #   slurm_id : 0
+    #   description: "MTM"
+    xsrwtwt0 :
       slurm_id : 0
       description: "new73gkw MTM run diff"
-    new73gkw:
+    # new73gkw:
+    #   slurm_id : 0
+    #   description: "MTM FT"
+    # mdxx9zg0:
+    #   slurm_id : 0
+    #   description: "oliqngmf -> ss900572 -> mdxx9zg0 (dcft)"
+    # la4ydebc:
+    #   slurm_id : 0
+    #   description: "new73gkw -> prkmwzlg -> la4ydebc (dcft)"
+    ni41n7gy:
       slurm_id : 0
-      description: "MTM FT"
+      description: "skkbxfya -> ni41n7gy (128 epochs)"
     # qtbn8vgb:
     #   slurm_id : 0
     #   description: "skkbxfya -> ni41n7gy -> qtbn8vgb"
-    # kz2n1t60:
-    #   slurm_id : 0
-    #   description: "skkbxfya -> mx7k88dy -> kz2n1t60"
+    kz2n1t60:
+      slurm_id : 0
+      description: "skkbxfya -> mx7k88dy -> kz2n1t60"
     # hzsc0c1m:
     #   slurm_id : 0
     #   description: "skkbxfya -> xxoplye6 -> hzsc0c1m"

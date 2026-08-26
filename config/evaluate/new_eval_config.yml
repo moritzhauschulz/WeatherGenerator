@@ -49,8 +49,8 @@ run_ids:
           plot_target: false
           plot_histograms: false
           plot_ensemble: "members"
-  l05d7kvm:
-    label: "skkbxfya -> ni41n7gy -> qtbn8vgb"
+  dabg7c2e:
+    label: "cw6a4szu -> bwmk4ktc -> mibn2qst (from last chkpt)"
     epoch: 0
     rank: 0
     streams:
@@ -62,12 +62,70 @@ run_ids:
         plotting:
           sample: "all"
           forecast_step: "all"
-          plot_maps: true
-          plot_animations: true
-          plot_bias: true
+          plot_maps: false
+          plot_animations: false
+          plot_bias: false
           plot_target: false
           plot_histograms: false
           plot_ensemble: "members"
+  # r0cfonyp:
+  #   label: "oliqngmf -> ss900572 -> mdxx9zg0"
+  #   epoch: 0
+  #   rank: 0
+  #   streams:
+  #     ERA5:
+  #       channels: ['q_850']
+  #       evaluation:
+  #         sample: "all"
+  #         forecast_step: "all"
+  #       plotting:
+  #         sample: "all"
+  #         forecast_step: "all"
+  #         plot_maps: true
+  #         plot_animations: true
+  #         plot_bias: true
+  #         plot_target: false
+  #         plot_histograms: false
+  #         plot_ensemble: "members"
+  # vuny076f:
+  #   label: "new73gkw -> prkmwzlg -> la4ydebc"
+  #   epoch: 0
+  #   rank: 0
+  #   streams:
+  #     ERA5:
+  #       channels: ['q_850']
+  #       evaluation:
+  #         sample: "all"
+  #         forecast_step: "all"
+  #       plotting:
+  #         sample: "all"
+  #         forecast_step: "all"
+  #         plot_maps: true
+  #         plot_animations: true
+  #         plot_bias: true
+  #         plot_target: false
+  #         plot_histograms: false
+  #         plot_ensemble: "members"
+      
+  # l05d7kvm:
+  #   label: "skkbxfya -> ni41n7gy -> qtbn8vgb"
+  #   epoch: 0
+  #   rank: 0
+  #   streams:
+  #     ERA5:
+  #       channels: ['q_850']
+  #       evaluation:
+  #         sample: "all"
+  #         forecast_step: "all"
+  #       plotting:
+  #         sample: "all"
+  #         forecast_step: "all"
+  #         plot_maps: true
+  #         plot_animations: true
+  #         plot_bias: true
+  #         plot_target: false
+  #         plot_histograms: false
+  #         plot_ensemble: "members"
   d45kmqzc:
     label: "skkbxfya -> mx7k88dy -> kz2n1t60"
     epoch: 0
@@ -87,22 +145,22 @@ run_ids:
           plot_target: false
           plot_histograms: false
           plot_ensemble: "members"
-  we3jpg28:
-    label: "skkbxfya -> xxoplye6 -> hzsc0c1m"
-    epoch: 0
-    rank: 0
-    streams:
-      ERA5:
-        channels: ['q_850']
-        evaluation:
-          sample: "all"
-          forecast_step: "all"
-        plotting:
-          sample: "all"
-          forecast_step: "all"
-          plot_maps: true
-          plot_animations: true
-          plot_bias: true
-          plot_target: false
-          plot_histograms: false
-          plot_ensemble: "members"
+  # we3jpg28:
+  #   label: "skkbxfya -> xxoplye6 -> hzsc0c1m"
+  #   epoch: 0
+  #   rank: 0
+  #   streams:
+  #     ERA5:
+  #       channels: ['q_850']
+  #       evaluation:
+  #         sample: "all"
+  #         forecast_step: "all"
+  #       plotting:
+  #         sample: "all"
+  #         forecast_step: "all"
+  #         plot_maps: true
+  #         plot_animations: true
+  #         plot_bias: true
+  #         plot_target: false
+  #         plot_histograms: false
+  #         plot_ensemble: "members"

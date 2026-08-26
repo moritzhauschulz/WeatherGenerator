@@ -10,7 +10,7 @@ uv run inference --from-run-id <MODEL> \
   --options <the usual inference options>
 ```
 
-`scripts/make_decoder_overlay.py` writes that file. Read the three blocks below to check its output
+`scripts/make_decoder_overlay.py` writes that file. Read the four blocks below to check its output
 or to write one by hand.
 
 ## Block 1 — the physical loss (always)
@@ -105,6 +105,35 @@ streams:
 Needed for any stream that declares target channels. Its geoinfo count typically differs from the
 decoded stream's, so its decoder could not take the checkpoint weights in any case.
 
+## Block 4 — the offset=1 inference alignment (always, inference only)
+
+```yaml
+test_config:
+  model_input:
+    forecasting:
+      num_steps_input: 1
+  forecast:
+    offset: 1
+    policy: "fixed"
+```
+
+Relabels the model's sole loaded input step as "now" and its forecast step(s) as starting +1 x
+`time_step` ahead, so a diffusion model's RMSE rollout aligns with a deterministic (offset=1)
+model's lead times. See the `fe_diffusion_model_conditioning="forecast"` branch in
+`src/weathergen/model/model.py` (`stage=="inference" and tokens.shape[1]==1 and
+forecast_offset==1`).
+
+This block must live under `test_config` and nowhere else. `test_config` only applies during
+inference (`inference` merges `validation_config` with `test_config`; `train`/`train_continue`
+never read `test_config` at all), so putting it there is what keeps it out of training and
+validation. Putting the same keys under `training_config` or `validation_config` instead would
+wrongly relabel the input step during training/validation too — always add it under `test_config`,
+never elsewhere. `make_decoder_overlay.py` writes this block unconditionally in every overlay it
+generates, whether or not the model needs RMSE-vs-lead-time alignment for this particular run —
+it's harmless to a plain physical-output overlay (a single input step is always "now" whether or
+not you also care about matching a deterministic model's lead times), so there is no reason to
+omit it. If you write an overlay by hand instead of using the script, add it too.
+
 ## Verifying before you burn GPU time
 
 ```bash
@@ -118,12 +147,15 @@ print('streams:', list(cf.streams))
 print('reconstructed:', {k: is_stream_reconstructed(v) for k, v in cf.streams.items()})
 print('val losses:', {k: v.type for k, v in cf.validation_config.losses.items()})
 print('load_decoder_chkpt:', cf.load_decoder_chkpt)
+print('test_config.forecast:', cf.test_config.forecast)
+print('test_config.model_input.forecasting:', cf.test_config.model_input.forecasting)
 "
 ```
 
-Expect exactly one stream reconstructed — the decoded one — one `LossPhysical` term, and the
-backbone in `load_decoder_chkpt`. During the run, check the log for
-`Loading decoder weights from id=...` and for any `Missing keys` naming decoder modules.
+Expect exactly one stream reconstructed — the decoded one — one `LossPhysical` term, the
+backbone in `load_decoder_chkpt`, and `test_config.forecast == {offset: 1, policy: fixed}` with
+`test_config.model_input.forecasting.num_steps_input == 1` (Block 4). During the run, check the
+log for `Loading decoder weights from id=...` and for any `Missing keys` naming decoder modules.
 
 ## Caveat to state in any write-up
 
