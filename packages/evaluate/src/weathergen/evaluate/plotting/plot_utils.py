@@ -870,9 +870,7 @@ def psd_plot_metric_region(
             # Third pass: per-run evolution plot (unchanged — one run per plot).
             for run_id, per_fstep_datasets in run_fstep_datasets.items():
                 if len(per_fstep_datasets) >= 2:
-                    method_tag = next(iter(per_fstep_datasets.values())).get(
-                        "psd_method", "sht"
-                    )
+                    method_tag = next(iter(per_fstep_datasets.values())).get("psd_method", "sht")
                     evo_name = create_filename(
                         prefix=[metric, method_tag, region],
                         middle=[run_id],
