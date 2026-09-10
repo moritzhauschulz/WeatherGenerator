@@ -10,6 +10,7 @@
 import dataclasses
 import logging
 import pathlib
+import zlib
 from collections.abc import Sequence
 
 import numpy as np
@@ -18,7 +19,7 @@ from omegaconf import OmegaConf
 
 from weathergen.common.config import Config
 from weathergen.common.io import IOReaderData
-from weathergen.datasets.batch import ModelBatch
+from weathergen.datasets.batch import BatchSamples, ModelBatch
 from weathergen.datasets.data_reader_anemoi import DataReaderAnemoi
 from weathergen.datasets.data_reader_base import (
     DataReaderBase,
@@ -137,15 +138,20 @@ class MultiStreamDataSampler(torch.utils.data.IterableDataset):
                 )
             self.teacher_time_offset = 0
 
-        # Latent rollout RMSE diagnostic (inference only). Attaches an ISOLATED set of
-        # source-channel samples at the forecast times [t, t+1, ..., t+(K-1)] to each batch
-        # (batch.latent_rmse_source), used only to encode truth latents for the diagnostic.
-        # The base index, the standard source/target samples, losses and zarr output are left
-        # exactly as a normal run — this is a read-only side channel.
+        # Latent rollout RMSE diagnostic (inference only). Rather than pre-collecting source
+        # data at every forecast time (K steps x every stream, all held at once -> hundreds of
+        # GB on obs-heavy configs), each batch carries a lightweight `latent_rmse_recipe`; the
+        # trainer rebuilds and encodes the truth latents a few forecast steps at a time via
+        # `build_latent_rmse_source_chunk`. Read-only side channel: the base index, the standard
+        # source/target samples, losses and zarr output are untouched.
         self.latent_rollout_rmse = mode_cfg.get("latent_rollout_rmse", False)
         if self.latent_rollout_rmse:
             assert self.output_offset == 0, (
                 f"latent_rollout_rmse requires forecast.offset == 0, got {self.output_offset}"
+            )
+            assert cf.data_loading.num_workers == 0, (
+                "latent_rollout_rmse needs data_loading.num_workers=0: the truth latents are "
+                f"rebuilt lazily from the main-process dataset, got {cf.data_loading.num_workers}"
             )
 
         # initialise fsm, but can change for future mini_epochs
@@ -474,44 +480,73 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
 
         return stream_data
 
-    def _build_latent_rmse_stream_data(
-        self,
-        stream_info: dict,
-        base_idx: TIndex,
-        num_forecast_steps: int,
-        forecast_input_data: list,
-        forecast_input_tokens: list,
-        mask: torch.Tensor | None,
-    ) -> StreamData:
+    def build_latent_rmse_source_chunk(self, recipe: dict, j0: int, j1: int) -> BatchSamples:
         """
-        Build an ISOLATED source-channel StreamData at the forecast times
-        [t, t+1, ..., t+(K-1)] for the latent rollout RMSE diagnostic.
+        Rebuild the latent-RMSE truth samples for forecast steps ``[j0, j1)`` only.
 
-        Like ``_build_stream_data_input`` but walks *forward* over forecast steps: input step k
-        holds the source encoding of the true state at t+k. Used only to encode truth latents;
-        never fed to the model's conditioning, losses or zarr output.
+        Called by the trainer, one chunk at a time, so the truth source data (K forecast
+        steps x every stream) is never all held at once. Returns a ``BatchSamples`` carrying
+        ``j1 - j0`` source steps per stream, ready for ``encode_source_chunked``. Reproduces
+        the eager per-batch collection exactly, sliced by forecast step; uses a deterministic
+        per-(base_idx, stream, step) RNG so the result does not depend on collection order.
         """
-        num_output_steps = self._get_output_length(num_forecast_steps)
-        stream_data = StreamData(
-            base_idx, num_output_steps, num_output_steps, self.num_healpix_cells
+        base_idx = recipe["base_idx"]
+        n = j1 - j0
+        samples = BatchSamples(
+            recipe["stream_names"], recipe["num_target_samples"], n, list(range(n))
         )
-        for step, timestep_idx in enumerate(range(self.output_offset, num_output_steps)):
-            step_forecast_dt = base_idx + (self.time_step * timestep_idx) // self.step_timedelta
-            time_win = self.time_window_handler.window(step_forecast_dt)
 
-            rdata = forecast_input_data[step]
-            token_data = forecast_input_tokens[step]
-            if token_data[0] is None and token_data[1] is None:
+        for stream_name in recipe["stream_names"]:
+            readers = self.streams_datasets[stream_name].readers
+            stream_info = self.streams[stream_name]
+            target_masks = recipe["target_masks"][stream_name]
+
+            # Diagnostic streams (Identity embed, no source channels) are never a model input;
+            # the regular source path skips them (_build_stream_data_input), and the embedder
+            # asserts if they are counted in tokens_lens. Add an empty StreamData so the stream
+            # set / get_tokens_lens stay aligned, but collect no source for it.
+            if is_stream_diagnostic(stream_info, self._stage):
+                for tidx in range(len(target_masks)):
+                    samples.samples[tidx].add_stream_data(
+                        stream_name, StreamData(base_idx, n, n, self.num_healpix_cells)
+                    )
                 continue
 
-            (source_cells, source_cells_lens) = self.tokenizer.get_source(
-                stream_info, rdata, token_data, (time_win.start, time_win.end), mask
-            )
-            stream_data.add_source(
-                self._stage, step, rdata, source_cells_lens, source_cells, rdata.is_spoof
-            )
+            # collect + tokenize the source window at each forecast step in this chunk once
+            windows = []  # (time_win, rdata, token_data) for local steps 0..n-1
+            for j in range(j0, j1):
+                dt = base_idx + (self.time_step * (self.output_offset + j)) // self.step_timedelta
+                time_win = self.time_window_handler.window(dt)
+                rng = np.random.default_rng(
+                    [int(base_idx), zlib.crc32(stream_name.encode()), int(j)]
+                )
+                rdata = collect_datasources(readers, dt, "source", rng)
+                if rdata.is_empty():
+                    rdata = spoof(
+                        self.healpix_level,
+                        time_win.start,
+                        readers[0].get_geoinfo_size(),
+                        len(readers[0].mean[readers[0].source_idx]),
+                    )
+                    rdata.is_spoof = True
+                token_data = self.tokenizer.get_tokens_windows(stream_info, [rdata], True)[0]
+                windows.append((time_win, rdata, token_data))
 
-        return stream_data
+            for tidx, mask in enumerate(target_masks):
+                stream_data = StreamData(base_idx, n, n, self.num_healpix_cells)
+                for local, (time_win, rdata, token_data) in enumerate(windows):
+                    if token_data[0] is None and token_data[1] is None:
+                        continue
+                    (source_cells, source_cells_lens) = self.tokenizer.get_source(
+                        stream_info, rdata, token_data, (time_win.start, time_win.end), mask
+                    )
+                    stream_data.add_source(
+                        self._stage, local, rdata, source_cells_lens, source_cells, rdata.is_spoof
+                    )
+                samples.samples[tidx].add_stream_data(stream_name, stream_data)
+
+        samples.tokens_lens = get_tokens_lens(recipe["stream_names"], samples, n)
+        return samples
 
     def _build_stream_data_output(
         self,
@@ -689,27 +724,7 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
 
                 output_data += [rdata]
 
-        # source-channel data at the forecast times, for the latent RMSE diagnostic only.
-        # Isolated from input_data/output_data; consumed only via batch.latent_rmse_source.
-        forecast_input_data = []
-        if self.latent_rollout_rmse:
-            for timestep_idx in range(self.output_offset, num_output_steps):
-                step_forecast_dt = (
-                    base_idx + (self.time_step * timestep_idx) // self.step_timedelta
-                )
-                rdata = collect_datasources(stream_ds, step_forecast_dt, "source", self.rng)
-                if rdata.is_empty():
-                    time_win = self.time_window_handler.window(step_forecast_dt)
-                    rdata = spoof(
-                        self.healpix_level,
-                        time_win.start,
-                        stream_ds[0].get_geoinfo_size(),
-                        len(stream_ds[0].mean[stream_ds[0].source_idx]),
-                    )
-                    rdata.is_spoof = True
-                forecast_input_data += [rdata]
-
-        return (input_data, output_data, forecast_input_data)
+        return (input_data, output_data)
 
     def _get_source_target_masks(self, training_mode):
         """
@@ -783,8 +798,18 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
             num_output_steps,
         )
         if self.latent_rollout_rmse:
-            # isolated truth samples: one per target sample, mirroring the target masks
-            batch.init_latent_rmse_source(self.streams, num_target_samples)
+            # Lightweight recipe only: the trainer rebuilds the truth source data a chunk of
+            # forecast steps at a time via build_latent_rmse_source_chunk() so it is never all
+            # resident at once. target_masks are batch-specific, so capture them here.
+            batch.latent_rmse_recipe = {
+                "base_idx": idx,
+                "num_target_samples": num_target_samples,
+                "stream_names": list(self.streams_datasets.keys()),
+                "target_masks": {
+                    sname: list(masks_streams[sname][0].masks)
+                    for sname in self.streams_datasets
+                },
+            }
 
         # for all streams
         for stream_name, stream_ds in self.streams_datasets.items():
@@ -801,14 +826,14 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
             # input_data and output_data is conceptually consecutive but differs
             # in source and target channels; overlap in one window when self.output_offset=0
             i_max = input_steps.max().item()
-            (input_data, output_data, forecast_input_data) = self._get_data_windows(
+            (input_data, output_data) = self._get_data_windows(
                 idx, num_forecast_steps, i_max, stream_ds.readers
             )
 
             # When teacher_time_offset > 0, load a separate set of data windows
             # shifted forward in time for the teacher (target) samples.
             if self.teacher_time_offset > 0:
-                (input_data_target, output_data_target, _) = self._get_data_windows(
+                (input_data_target, output_data_target) = self._get_data_windows(
                     idx + self.teacher_time_offset, num_forecast_steps, i_max, stream_ds.readers
                 )
             else:
@@ -829,12 +854,6 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
             else:
                 input_tokens_target = input_tokens
                 output_tokens_target = output_tokens
-
-            forecast_input_tokens = (
-                self.tokenizer.get_tokens_windows(stream_info, forecast_input_data, True)
-                if self.latent_rollout_rmse
-                else None
-            )
 
             for sidx, source_mask in enumerate(source_masks.masks):
                 # Map each source to its target
@@ -915,27 +934,10 @@ Set repeat_data_in_mini_epoch to True if this is undesired."
                 ]
                 batch.add_target_stream(tidx, student_indices, stream_name, sdata, target_metadata)
 
-                # Isolated latent-RMSE truth: forecast-time source under the same target mask
-                # (the mask the model is trained to predict), added to a separate sample set.
-                if self.latent_rollout_rmse:
-                    truth_sdata = self._build_latent_rmse_stream_data(
-                        stream_info,
-                        idx,
-                        num_forecast_steps,
-                        forecast_input_data,
-                        forecast_input_tokens,
-                        mask=target_mask,
-                    )
-                    batch.add_latent_rmse_source_stream(tidx, stream_name, truth_sdata)
-
         source_in_steps = input_steps.max().item()
         target_in_steps = np.array([tc.get("num_steps_input", 1) for _, tc in target_cfgs.items()])
         target_in_steps = 1 if len(target_in_steps) == 0 else target_in_steps.max().item()
         batch = self._preprocess_model_batch(batch, source_in_steps, target_in_steps)
-        if self.latent_rollout_rmse:
-            batch.latent_rmse_source.tokens_lens = get_tokens_lens(
-                self.streams, batch.latent_rmse_source, num_output_steps
-            )
 
         # add target times in source for diffusion model date/time conditioning
         if self.diffusion_model_conditioning in ["date_time", "date", "time"]:

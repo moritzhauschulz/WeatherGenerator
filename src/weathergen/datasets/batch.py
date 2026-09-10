@@ -355,22 +355,11 @@ class ModelBatch:
         self.source2target_matching_idxs = np.full(num_source_samples, -1, dtype=np.int32)
         self.target2source_matching_idxs = [[] for _ in range(num_target_samples)]
 
-        # Optional isolated samples carrying source-channel network input at the forecast
-        # times, used only by the latent rollout RMSE diagnostic to encode truth latents.
-        # None on every standard batch; the source/target samples above are never affected.
-        self.latent_rmse_source: BatchSamples | None = None
-
-    def init_latent_rmse_source(self, streams, num_samples: int) -> None:
-        """Create the isolated latent-RMSE truth samples (see ``latent_rmse_source``)."""
-        self.latent_rmse_source = BatchSamples(
-            streams, num_samples, self.output_steps, self.output_idxs
-        )
-
-    def add_latent_rmse_source_stream(
-        self, sample_idx: int, stream_name: str, stream_data: StreamData
-    ) -> None:
-        """Add one stream's forecast-time source data to the latent-RMSE truth samples."""
-        self.latent_rmse_source.samples[sample_idx].add_stream_data(stream_name, stream_data)
+        # Optional recipe for the latent rollout RMSE diagnostic: enough to rebuild the
+        # forecast-time truth source samples one chunk of forecast steps at a time (see
+        # MultiStreamDataSampler.build_latent_rmse_source_chunk). None on every standard batch;
+        # holds no tensors that need pinning or a device move.
+        self.latent_rmse_recipe: dict | None = None
 
     def pin_memory(self):
         """Pin all tensors in this batch to CPU pinned memory"""
@@ -381,9 +370,6 @@ class ModelBatch:
         # pin target samples
         self.target_samples.pin_memory()
 
-        if self.latent_rmse_source is not None:
-            self.latent_rmse_source.pin_memory()
-
         return self
 
     def to_device(self, device):  # -> ModelBatch
@@ -393,9 +379,6 @@ class ModelBatch:
 
         self.source_samples.to_device(device)
         self.target_samples.to_device(device)
-
-        if self.latent_rmse_source is not None:
-            self.latent_rmse_source.to_device(device)
 
         self.device = device
 
