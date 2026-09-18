@@ -856,6 +856,48 @@ def _target_legend_label(n_runs: int) -> str:
     return "Target" if n_runs < 2 else f"Target (mean of {n_runs} runs)"
 
 
+def _compute_psd_gap_grid(
+    per_fstep_datasets: dict[int, dict], label: str = "", variable: str = ""
+) -> tuple[NDArray, list[int], NDArray] | None:
+    """Build a (n_fsteps, n_freq) grid of log(prediction) - log(target) for one run.
+
+    Positive = over-prediction, negative = under-prediction — matching this codebase's existing
+    ``calc_bias`` convention (``p - gt``, score.py) and the PSD ratio panels' ``pred / target``
+    (ratio > 1 = over-prediction), rather than the mathematically-arbitrary opposite sign.
+
+    Forecast steps whose frequency array doesn't match the first usable step's shape are
+    dropped (with a warning) rather than raising, since PSD's frequency grid can in principle
+    differ across steps depending on NaN-masking.
+
+    Returns
+    -------
+    tuple[NDArray, list[int], NDArray] | None
+        ``(freq, used_fsteps, grid)``, or None if fewer than two forecast steps were usable.
+    """
+    fsteps = sorted(per_fstep_datasets)
+    ref_freq = np.asarray(per_fstep_datasets[fsteps[0]]["frequencies"])
+    rows, used_fsteps = [], []
+    for fstep in fsteps:
+        ds = per_fstep_datasets[fstep]
+        freq = np.asarray(ds["frequencies"])
+        if freq.shape != ref_freq.shape:
+            _logger.warning(
+                f"PSD gap heatmap ({label} / {variable}): fstep {fstep} has a differently "
+                "shaped frequency grid; excluding it from the heatmap."
+            )
+            continue
+        tar = np.asarray(ds["psd_target"])
+        pred = np.asarray(ds["psd_prediction"])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            gap = np.log(np.where(pred > 0, pred, np.nan)) - np.log(np.where(tar > 0, tar, np.nan))
+        rows.append(gap)
+        used_fsteps.append(fstep)
+
+    if len(rows) < 2:
+        return None
+    return ref_freq, used_fsteps, np.vstack(rows)
+
+
 def psd_plot_metric_region(
     metric: str,
     region: str,
@@ -868,9 +910,21 @@ def psd_plot_metric_region(
     PSD curves (frequencies, target PSD, prediction PSD) are stored in
     ``score.attrs`` by ``Scores.calc_psd`` and read back here.
 
-    For a given forecast step, every run is overlaid on a single plot, against one target
-    curve averaged over all the runs contributing to that plot. Evolution plots (spectra
-    across forecast steps) remain one per run.
+    Wherever several runs share one axes, the target curve drawn against them is averaged
+    across all of those runs (never taken from whichever run happens to be first), and the
+    legend says so. Ratio panels keep each run's own target as the denominator.
+
+    For a given forecast step, all runs are overlaid on one plot. Evolution plots (across
+    forecast steps) remain one-per-run, accompanied by a per-run frequency x forecast-step
+    gap heatmap and a per-run, per-forecast-step animated gif (unless disabled via
+    ``plotter.psd_animate``). A side-by-side combined view (one panel per run, one shared
+    legend/colorbar) of the evolution plot and the gap heatmap is also produced, unless
+    disabled via ``plotter.psd_combined``. A separate first-vs-last forecast step comparison
+    plot across all runs (against a target averaged over all runs and over only those two
+    steps) is produced
+    unless disabled via ``plotter.psd_first_last``. A subsampled forecast-step montage (first
+    step, every n-th step, final step; one panel per step, shared legend/axes) is produced
+    unless disabled via ``plotter.psd_step_montage``.
     """
     streams_set = collect_streams(runs)
     channels_set = collect_channels(scores_dict, metric, region, runs)
@@ -909,8 +963,67 @@ def psd_plot_metric_region(
             if not run_fstep_datasets:
                 continue
 
-            # Second pass: one combined plot per forecast step, overlaying every run that
-            # has data for it.
+            # First-and-a-half pass: first-vs-last forecast step comparison across all runs.
+            # "First"/"last" are the shortest common range across all contributing runs (latest
+            # of each run's own first step, earliest of each run's own last step), so every run
+            # is compared at literally the same two step numbers even when rollout lengths
+            # differ (e.g. one run only produced 4 of a requested 40 steps).
+            if getattr(plotter, "psd_first_last", True):
+                run_fstep_lists = {rid: sorted(d) for rid, d in run_fstep_datasets.items() if d}
+                if run_fstep_lists:
+                    common_first = max(fsteps[0] for fsteps in run_fstep_lists.values())
+                    common_last = min(fsteps[-1] for fsteps in run_fstep_lists.values())
+                    if common_first < common_last:
+                        run_first_last = {
+                            rid: {
+                                "first": run_fstep_datasets[rid][common_first],
+                                "last": run_fstep_datasets[rid][common_last],
+                            }
+                            for rid in run_fstep_lists
+                            if common_first in run_fstep_datasets[rid]
+                            and common_last in run_fstep_datasets[rid]
+                        }
+                        if run_first_last:
+                            # Average the target over every contributing run as well as over
+                            # the two compared steps, rather than taking the first run's.
+                            fl_leaves = [
+                                steps[which]
+                                for steps in run_first_last.values()
+                                for which in ("first", "last")
+                            ]
+                            fl_freq, target_avg, n_fl_targets = _average_target_psd(
+                                fl_leaves,
+                                context=f"{stream}/{ch} first/last "
+                                f"(steps {common_first} & {common_last})",
+                            )
+                            # n_fl_targets counts leaves (2 per run); report runs.
+                            n_fl_runs = max(n_fl_targets // 2, 1)
+                            fl_method_tag = fl_leaves[0].get("psd_method", "sht")
+                            fl_name = create_filename(
+                                prefix=[metric, fl_method_tag, region],
+                                middle=sorted(run_first_last),
+                                suffix=[stream, ch, "first_last"],
+                            )
+                            plotter.psd_first_last_plot(
+                                run_first_last,
+                                run_labels,
+                                target_avg,
+                                fl_freq,
+                                common_first,
+                                common_last,
+                                n_target_runs=n_fl_runs,
+                                tag=fl_name,
+                                variable=ch,
+                            )
+                        else:
+                            _logger.warning(
+                                f"PSD first/last plot ({stream}/{ch}): no run has data at "
+                                f"both the shared first ({common_first}) and last "
+                                f"({common_last}) steps; skipping."
+                            )
+
+            # Second pass: one combined plot per forecast step, overlaying every run
+            # that has data for it.
             all_fsteps = sorted({fstep for d in run_fstep_datasets.values() for fstep in d})
             for fstep in all_fsteps:
                 run_ids = [rid for rid, d in run_fstep_datasets.items() if fstep in d]
@@ -931,21 +1044,148 @@ def psd_plot_metric_region(
                     forecast_step=str(fstep),
                 )
 
-            # Third pass: per-run evolution across forecast steps.
+            # Third pass: per-run evolution plot, per-run gap heatmap (colour scale shared
+            # across every run being compared for this stream/channel, computed up front),
+            # plus (if enabled) per-run per-fstep frames assembled into an animated gif.
+            run_gap_grids: dict[str, tuple[NDArray, list[int], NDArray]] = {}
             for run_id, per_fstep_datasets in run_fstep_datasets.items():
+                result = _compute_psd_gap_grid(
+                    per_fstep_datasets, label=run_labels[run_id], variable=ch
+                )
+                if result is not None:
+                    run_gap_grids[run_id] = result
+
+            if run_gap_grids:
+                all_gap_vals = np.concatenate(
+                    [grid.ravel() for _, _, grid in run_gap_grids.values()]
+                )
+                gap_min = float(np.nanmin(all_gap_vals))
+                gap_max = float(np.nanmax(all_gap_vals))
+                # Extend to include 0 (perfect prediction) so TwoSlopeNorm's centre is always
+                # valid, even if every run happens to be biased the same direction. TwoSlopeNorm
+                # requires vmin < vcenter(=0) < vmax strictly, so nudge either bound off zero
+                # with an epsilon scaled to the data when it would otherwise land exactly (or
+                # only) on one side.
+                eps = max(abs(gap_min), abs(gap_max), 1e-9) * 1e-3
+                gap_vmin = min(gap_min, -eps)
+                gap_vmax = max(gap_max, eps)
+
+            for run_id, per_fstep_datasets in run_fstep_datasets.items():
+                if len(per_fstep_datasets) < 2:
+                    continue
+
                 method_tag = next(iter(per_fstep_datasets.values())).get("psd_method", "sht")
-                ev_name = create_filename(
+                evo_name = create_filename(
                     prefix=[metric, method_tag, region],
                     middle=[run_id],
                     suffix=[stream, ch, "evolution"],
                 )
                 plotter.psd_evolution_plot(
                     per_fstep_datasets,
-                    tag=ev_name,
+                    tag=evo_name,
                     variable=ch,
                     label=run_labels[run_id],
                 )
 
+                if run_id in run_gap_grids:
+                    freq, used_fsteps, grid = run_gap_grids[run_id]
+                    heatmap_name = create_filename(
+                        prefix=[metric, method_tag, region],
+                        middle=[run_id],
+                        suffix=[stream, ch, "gap_heatmap"],
+                    )
+                    plotter.psd_gap_heatmap(
+                        freq,
+                        used_fsteps,
+                        grid,
+                        vmin=gap_vmin,
+                        vmax=gap_vmax,
+                        tag=heatmap_name,
+                        variable=ch,
+                        label=run_labels[run_id],
+                        psd_method=method_tag,
+                    )
+
+                if not getattr(plotter, "psd_animate", True):
+                    continue
+
+                # Single-run frames (one per forecast step) -> animated gif. The literal
+                # "frame" token keeps these filenames distinct from pass 2's combined-run
+                # per-fstep plots, which degenerate to the same middle=[run_id] when only
+                # one run is being compared.
+                frame_paths = []
+                for fstep in sorted(per_fstep_datasets):
+                    frame_name = create_filename(
+                        prefix=[metric, method_tag, region],
+                        middle=[run_id],
+                        suffix=[stream, ch, "frame", f"fstep{int(fstep):03d}"],
+                    )
+                    frame_paths.append(
+                        plotter.psd_plot(
+                            [per_fstep_datasets[fstep]],
+                            [run_labels[run_id]],
+                            tag=frame_name,
+                            variable=ch,
+                            forecast_step=str(fstep),
+                        )
+                    )
+                anim_name = create_filename(
+                    prefix=[metric, method_tag, region],
+                    middle=[run_id],
+                    suffix=[stream, ch, "animation"],
+                )
+                plotter.psd_gif(frame_paths, tag=anim_name)
+
+            # Combined side-by-side views: one panel per run, one shared legend/colorbar,
+            # reusing the data already gathered above (no new plumbing).
+            if getattr(plotter, "psd_combined", True) and run_fstep_datasets:
+                combined_method_tag = next(
+                    iter(next(iter(run_fstep_datasets.values())).values())
+                ).get("psd_method", "sht")
+                evo_combined_name = create_filename(
+                    prefix=[metric, combined_method_tag, region],
+                    middle=sorted(run_fstep_datasets),
+                    suffix=[stream, ch, "evolution_combined"],
+                )
+                plotter.psd_evolution_combined_plot(
+                    run_fstep_datasets, run_labels, tag=evo_combined_name, variable=ch
+                )
+
+                if run_gap_grids:
+                    heatmap_combined_name = create_filename(
+                        prefix=[metric, combined_method_tag, region],
+                        middle=sorted(run_gap_grids),
+                        suffix=[stream, ch, "gap_heatmap_combined"],
+                    )
+                    plotter.psd_gap_heatmap_combined(
+                        run_gap_grids,
+                        vmin=gap_vmin,
+                        vmax=gap_vmax,
+                        run_labels=run_labels,
+                        tag=heatmap_combined_name,
+                        variable=ch,
+                        psd_method=combined_method_tag,
+                    )
+
+            # Subsampled forecast-step montage: first step, every n-th step, and the final
+            # step, one panel per step, shared legend/axes across the whole grid.
+            if getattr(plotter, "psd_step_montage", True) and run_fstep_datasets:
+                montage_method_tag = next(
+                    iter(next(iter(run_fstep_datasets.values())).values())
+                ).get("psd_method", "sht")
+                montage_n = getattr(plotter, "psd_step_montage_n", 10)
+                montage_name = create_filename(
+                    prefix=[metric, montage_method_tag, region],
+                    middle=sorted(run_fstep_datasets),
+                    suffix=[stream, ch, "step_montage"],
+                )
+                plotter.psd_step_montage_plot(
+                    run_fstep_datasets,
+                    run_labels,
+                    n=montage_n,
+                    tag=montage_name,
+                    variable=ch,
+                )
     _logger.info(f"PSD plots saved successfully into: {plotter.out_plot_dir_psd}")
 
 
